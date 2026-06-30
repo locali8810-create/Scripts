@@ -340,12 +340,12 @@ local currentSearch = ""
 
 -- NOVO: Variáveis de captura em tempo real
 local isCapturing = false
-local capturedRemotes = {}
+local capturedRemotes = {} -- SÓ eventos que foram REALMENTE chamados
 local captureConnections = {}
 local originalFireServer = {}
 local originalInvokeServer = {}
 local captureRenderConnection = nil
-local lastCaptureTime = 0
+local hookedInstances = {} -- Rastreia quais já foram hookados
 
 local function updateFilterButtons()
 	local activeBg = colorSettings["FilterButtons"]["ActiveBg"]
@@ -433,7 +433,7 @@ local function renderButtons()
 	end
 end
 
--- NOVO: Função para renderizar botões de captura em tempo real
+-- NOVO: Função para renderizar APENAS eventos que foram chamados
 local function renderCaptureButtons()
 	for _, btnData in pairs(remoteButtons) do
 		btnData.Button:Destroy()
@@ -525,6 +525,72 @@ local function renderCaptureButtons()
 	end
 end
 
+-- NOVO: Função para fazer hook em um RemoteEvent
+local function hookRemoteEvent(instance)
+	if hookedInstances[instance] then return end
+	hookedInstances[instance] = true
+
+	local success, original = pcall(function()
+		return instance.FireServer
+	end)
+
+	if success and original then
+		originalFireServer[instance] = original
+		instance.FireServer = function(self, ...)
+			if self == instance then
+				local path = GetFullPathOfAnInstance(instance)
+				if not capturedRemotes[path] then
+					capturedRemotes[path] = {
+						Instance = instance,
+						Type = "RemoteEvent",
+						Path = path,
+						FireFunction = ":FireServer()",
+						Count = 0,
+						LastArgs = {...}
+					}
+				end
+				capturedRemotes[path].Count = capturedRemotes[path].Count + 1
+				capturedRemotes[path].LastArgs = {...}
+				capturedRemotes[path].LastTime = tick()
+			end
+			return original(self, ...)
+		end
+	end
+end
+
+-- NOVO: Função para fazer hook em um RemoteFunction
+local function hookRemoteFunction(instance)
+	if hookedInstances[instance] then return end
+	hookedInstances[instance] = true
+
+	local success, original = pcall(function()
+		return instance.InvokeServer
+	end)
+
+	if success and original then
+		originalInvokeServer[instance] = original
+		instance.InvokeServer = function(self, ...)
+			if self == instance then
+				local path = GetFullPathOfAnInstance(instance)
+				if not capturedRemotes[path] then
+					capturedRemotes[path] = {
+						Instance = instance,
+						Type = "RemoteFunction",
+						Path = path,
+						FireFunction = ":InvokeServer()",
+						Count = 0,
+						LastArgs = {...}
+					}
+				end
+				capturedRemotes[path].Count = capturedRemotes[path].Count + 1
+				capturedRemotes[path].LastArgs = {...}
+				capturedRemotes[path].LastTime = tick()
+			end
+			return original(self, ...)
+		end
+	end
+end
+
 -- NOVO: Função para iniciar/parar captura
 local function toggleCapture()
 	isCapturing = not isCapturing
@@ -539,143 +605,43 @@ local function toggleCapture()
 		CaptureCountLabel.Visible = true
 		CaptureCountLabel.Text = "Aguardando eventos..."
 
-		-- Limpa capturas anteriores
+		-- Limpa TUDO - começa do zero!
 		capturedRemotes = {}
+		hookedInstances = {}
 
-		-- Hook nos RemoteEvents existentes
+		-- Hook nos RemoteEvents/RemoteFunctions existentes (mas NÃO mostra na lista ainda)
 		for _, remoteData in ipairs(allRemotes) do
 			local instance = remoteData.Instance
-			if not originalFireServer[instance] and remoteData.Type == "RemoteEvent" then
-				local success, original = pcall(function()
-					return instance.FireServer
-				end)
-				if success and original then
-					originalFireServer[instance] = original
-					instance.FireServer = function(self, ...)
-						if self == instance then
-							local path = GetFullPathOfAnInstance(instance)
-							if not capturedRemotes[path] then
-								capturedRemotes[path] = {
-									Instance = instance,
-									Type = "RemoteEvent",
-									Path = path,
-									FireFunction = ":FireServer()",
-									Count = 0,
-									LastArgs = {...}
-								}
-							end
-							capturedRemotes[path].Count = capturedRemotes[path].Count + 1
-							capturedRemotes[path].LastArgs = {...}
-							capturedRemotes[path].LastTime = tick()
-							lastCaptureTime = tick()
-						end
-						return original(self, ...)
-					end
-				end
-			end
-
-			if not originalInvokeServer[instance] and remoteData.Type == "RemoteFunction" then
-				local success, original = pcall(function()
-					return instance.InvokeServer
-				end)
-				if success and original then
-					originalInvokeServer[instance] = original
-					instance.InvokeServer = function(self, ...)
-						if self == instance then
-							local path = GetFullPathOfAnInstance(instance)
-							if not capturedRemotes[path] then
-								capturedRemotes[path] = {
-									Instance = instance,
-									Type = "RemoteFunction",
-									Path = path,
-									FireFunction = ":InvokeServer()",
-									Count = 0,
-									LastArgs = {...}
-								}
-							end
-							capturedRemotes[path].Count = capturedRemotes[path].Count + 1
-							capturedRemotes[path].LastArgs = {...}
-							capturedRemotes[path].LastTime = tick()
-							lastCaptureTime = tick()
-						end
-						return original(self, ...)
-					end
-				end
+			if remoteData.Type == "RemoteEvent" then
+				hookRemoteEvent(instance)
+			else
+				hookRemoteFunction(instance)
 			end
 		end
 
-		-- Hook em novos RemoteEvents que forem criados
+		-- Hook em novos RemoteEvents/RemoteFunctions que forem criados
 		local descendantAddedConnection = game.DescendantAdded:Connect(function(descendant)
-			if isA(descendant, "RemoteEvent") or isA(descendant, "RemoteFunction") then
-				local remoteType = isA(descendant, "RemoteEvent") and "RemoteEvent" or "RemoteFunction"
-				local fireFunction = isA(descendant, "RemoteEvent") and ":FireServer()" or ":InvokeServer()"
-
-				-- Adiciona à lista
+			if isA(descendant, "RemoteEvent") then
+				-- Adiciona à lista geral
 				table.insert(allRemotes, {
 					Instance = descendant,
-					Type = remoteType,
+					Type = "RemoteEvent",
 					Path = GetFullPathOfAnInstance(descendant),
-					FireFunction = fireFunction
+					FireFunction = ":FireServer()"
 				})
+				-- Hook automaticamente (mas só aparece quando for chamado)
+				hookRemoteEvent(descendant)
 
-				-- Hook automaticamente
-				if remoteType == "RemoteEvent" and not originalFireServer[descendant] then
-					local success, original = pcall(function()
-						return descendant.FireServer
-					end)
-					if success and original then
-						originalFireServer[descendant] = original
-						descendant.FireServer = function(self, ...)
-							if self == descendant then
-								local path = GetFullPathOfAnInstance(descendant)
-								if not capturedRemotes[path] then
-									capturedRemotes[path] = {
-										Instance = descendant,
-										Type = "RemoteEvent",
-										Path = path,
-										FireFunction = ":FireServer()",
-										Count = 0,
-										LastArgs = {...}
-									}
-								end
-								capturedRemotes[path].Count = capturedRemotes[path].Count + 1
-								capturedRemotes[path].LastArgs = {...}
-								capturedRemotes[path].LastTime = tick()
-								lastCaptureTime = tick()
-							end
-							return original(self, ...)
-						end
-					end
-				end
-
-				if remoteType == "RemoteFunction" and not originalInvokeServer[descendant] then
-					local success, original = pcall(function()
-						return descendant.InvokeServer
-					end)
-					if success and original then
-						originalInvokeServer[descendant] = original
-						descendant.InvokeServer = function(self, ...)
-							if self == descendant then
-								local path = GetFullPathOfAnInstance(descendant)
-								if not capturedRemotes[path] then
-									capturedRemotes[path] = {
-										Instance = descendant,
-										Type = "RemoteFunction",
-										Path = path,
-										FireFunction = ":InvokeServer()",
-										Count = 0,
-										LastArgs = {...}
-									}
-								end
-								capturedRemotes[path].Count = capturedRemotes[path].Count + 1
-								capturedRemotes[path].LastArgs = {...}
-								capturedRemotes[path].LastTime = tick()
-								lastCaptureTime = tick()
-							end
-							return original(self, ...)
-						end
-					end
-				end
+			elseif isA(descendant, "RemoteFunction") then
+				-- Adiciona à lista geral
+				table.insert(allRemotes, {
+					Instance = descendant,
+					Type = "RemoteFunction",
+					Path = GetFullPathOfAnInstance(descendant),
+					FireFunction = ":InvokeServer()"
+				})
+				-- Hook automaticamente (mas só aparece quando for chamado)
+				hookRemoteFunction(descendant)
 			end
 		end)
 		table.insert(captureConnections, descendantAddedConnection)
@@ -724,6 +690,7 @@ local function toggleCapture()
 
 		-- Limpa capturas
 		capturedRemotes = {}
+		hookedInstances = {}
 
 		-- Volta para o modo normal
 		renderButtons()
