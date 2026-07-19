@@ -1,0 +1,153 @@
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "BRBOX HUB: Chameleon",
+    Icon = "bug",
+    Theme = "Dark"
+})
+
+local Tab = Window:Tab({ Title = "Main", Icon = "home" })
+
+local espEnabled = false
+local espObjects = {}
+
+local function removeEspForCharacter(character)
+    for i, espData in ipairs(espObjects) do
+        if espData.character == character then
+            if espData.highlight then
+                espData.highlight:Destroy()
+            end
+            if espData.line then
+                espData.line:Remove()
+            end
+            table.remove(espObjects, i)
+            break
+        end
+    end
+end
+
+local function addEspForCharacter(character)
+    if character == game.Players.LocalPlayer.Character then return end
+    if not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    for _, espData in ipairs(espObjects) do
+        if espData.character == character then return end
+    end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.FillColor = Color3.fromRGB(255, 0, 0)
+    highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Adornee = character
+    highlight.Parent = character
+    
+    local line = Drawing.new("Line")
+    line.Visible = true
+    line.From = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, workspace.CurrentCamera.ViewportSize.Y)
+    line.To = Vector2.new(0, 0)
+    line.Color = Color3.fromRGB(0, 255, 0)
+    line.Thickness = 1
+    line.Transparency = 1
+    
+    table.insert(espObjects, {
+        character = character,
+        highlight = highlight,
+        line = line
+    })
+end
+
+local function iesp()
+    espEnabled = not espEnabled
+    
+    if espEnabled then
+        for _, player in ipairs(workspace.Living:GetChildren()) do
+            addEspForCharacter(player)
+        end
+    else
+        for _, espData in ipairs(espObjects) do
+            if espData.highlight then
+                espData.highlight:Destroy()
+            end
+            if espData.line then
+                espData.line:Remove()
+            end
+        end
+        espObjects = {}
+    end
+end
+
+-- Atualização automática (invisível no script)
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if espEnabled then
+            -- Adiciona novos jogadores que entraram
+            for _, player in ipairs(workspace.Living:GetChildren()) do
+                addEspForCharacter(player)
+            end
+            
+            -- Remove jogadores que saíram ou personagens inválidos
+            for i = #espObjects, 1, -1 do
+                local espData = espObjects[i]
+                local character = espData.character
+                if not character or not character.Parent or not character:FindFirstChild("HumanoidRootPart") then
+                    if espData.highlight then
+                        espData.highlight:Destroy()
+                    end
+                    if espData.line then
+                        espData.line:Remove()
+                    end
+                    table.remove(espObjects, i)
+                end
+            end
+        end
+    end
+end)
+
+-- RenderStepped para atualizar as linhas
+game:GetService("RunService").RenderStepped:Connect(function()
+    if not espEnabled then return end
+    
+    for _, espData in ipairs(espObjects) do
+        local character = espData.character
+        local line = espData.line
+        
+        if character and character:FindFirstChild("HumanoidRootPart") then
+            local rootPart = character.HumanoidRootPart
+            local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(rootPart.Position)
+            
+            if onScreen then
+                line.From = Vector2.new(workspace.CurrentCamera.ViewportSize.X / 2, workspace.CurrentCamera.ViewportSize.Y)
+                line.To = Vector2.new(screenPos.X, screenPos.Y)
+                line.Visible = true
+            else
+                line.Visible = false
+            end
+        else
+            line.Visible = false
+        end
+    end
+end)
+
+Tab:Toggle({
+    Title = "ESP",
+    Value = false,
+    Callback = iesp
+})
+
+-- Teleporte para BBY
+local function tpBby()
+    local character = game.Players.LocalPlayer.Character
+    if character and character:FindFirstChild("HumanoidRootPart") then
+        character.HumanoidRootPart.CFrame = CFrame.new(440.0, 156.1, -158.6)
+    end
+end
+
+Tab:Button({
+    Title = "TP BBY",
+    Callback = tpBby
+})
